@@ -1,29 +1,3 @@
-"""
-Hybrid Trek Recommendation System (Enhanced)
-=============================================
-Combines ALS (collaborative filtering), Content-Based Filtering,
-and adaptive blending into a production-grade hybrid recommender.
-
-Enhanced with practical trekking parameters used as a post-ranking
-layer so that the core ALS + CBF pipeline continues to surface
-popular, well-known treks while the new attributes refine results
-for users who care about specific logistics.
-
-New trek metadata (stored but NOT injected into the feature matrix):
-  - Seasonality ratings per season (1-5)
-  - Altitude sickness detail (risk, acclimatization days, highest pass)
-  - Permit details (types, cost, advance booking days)
-  - Accommodation (types available, quality rating)
-  - Transportation (drive time from Kathmandu, flight required)
-  - Health & Safety (medical posts, helicopter evac, oxygen)
-
-New user preferences:
-  - preferred_season, ams_concern_level, permit_willingness,
-    accommodation_preference
-
-Usage:
-    python train.py
-"""
 
 import json
 import os
@@ -75,20 +49,6 @@ n_treks = len(treks)
 print(f"  Loaded {n_treks} treks")
 print(f"  Median base camp altitude: {med_alt:.0f} m")
 
-# ════════════════════════════════════════════════════════════════════════════
-#  STEP 1b : Synthesize Enhanced Trek Attributes (metadata only)
-# ════════════════════════════════════════════════════════════════════════════
-#
-#  IMPORTANT DESIGN DECISION:
-#  These attributes are stored as metadata on each trek dict and used
-#  ONLY in a lightweight post-ranking re-scorer. They are NOT added to
-#  the 24-column feature matrix that drives ALS and CBF.
-#
-#  Why? The core 24 features come from real trek data and correlate with
-#  trek popularity/quality. Injecting 14 randomly synthesized features
-#  into the same matrix would dilute the signal from ratings, popularity,
-#  difficulty, region, etc., causing the model to recommend obscure treks
-#  instead of well-known, popular ones.
 #
 print("\n" + "=" * 65)
 print("  STEP 1b : Synthesizing Enhanced Trek Attributes (metadata)")
@@ -305,7 +265,7 @@ print(f"  Sample trek accommodation: {treks[0]['accommodation']}")
 print(f"  NOTE: These are stored as metadata only — NOT in the feature matrix")
 
 # ════════════════════════════════════════════════════════════════════════════
-#  STEP 2 : Encode Trek Features (original 24 columns — unchanged)
+#  STEP 2 : Encode Trek Features 
 # ════════════════════════════════════════════════════════════════════════════
 
 print("\n" + "=" * 65)
@@ -454,17 +414,6 @@ print("=" * 65)
 
 def compute_base_score(user, trek):
     """
-    Compute base affinity score using weighted feature matching.
-
-    The CORE scoring (difficulty, budget, duration, fitness, region, quality)
-    uses the same weights as the original notebook to preserve the ranking
-    signal that surfaces popular, well-known treks.
-
-    The NEW parameters (season, AMS, permits, accommodation) act as
-    SMALL MODIFIERS (total weight ~2.0 out of ~14.5) — enough to
-    differentiate between similarly-ranked treks but not enough to
-    override a strong core match.
-
     Weight summary:
       Core (unchanged):
         Difficulty  3.0  |  Budget  2.5  |  Duration 2.0
