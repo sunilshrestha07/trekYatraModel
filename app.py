@@ -1,58 +1,3 @@
-"""
-Flask API — Hybrid Trek Recommender (Runtime Edition)
-======================================================
-All data comes from the trained model pickle. No raw JSON loading needed.
-
-Key change from v1:
-  The /recommend/hybrid endpoint now accepts preferences + interactions
-  at runtime. It computes the user vector on-the-fly using ALS fold-in,
-  so no user_id lookup or pre-built user index is needed.
-
-Weight formula mirrors train.py exactly:
-  weight_raw = views * 0.3
-             + booked * 3.0
-             + favorited * 1.5
-             + (rating / 5.0) * 2.0
-             + (time_spent_seconds / 600.0)
-  weight = clip(weight_raw, 0.5, 5.0)   ← runtime approx (no min-max norm)
-
-Endpoints:
-    GET  /health                — status & model info
-    GET  /treks/count           — total trek count
-    GET  /users                 — list known user IDs (training users)
-    POST /recommend/hybrid      — MAIN endpoint: hybrid or CBF cold-start
-    POST /recommend/als         — ALS-only for training users, CBF fallback
-    POST /recommend             — pure CBF from preferences
-    GET  /recommend/user/<id>   — hybrid for a training user (legacy)
-
-Body for /recommend/hybrid (from Node.js):
-    {
-      "preferences": {
-        "difficulty": 3,         (1-6, required)
-        "budget_max": 1500,      (200-5000, required)
-        "duration_max": 14,      (1-30, required)
-        "fitness": 2,            (1-4, required)
-        "preferred_season": "spring",       (optional)
-        "ams_concern_level": 3,             (optional, 1-5)
-        "permit_willingness": true,         (optional)
-        "accommodation_preference": "teahouse" (optional)
-      },
-      "interactions": [          (optional, pass [] for new users)
-        {
-          "trek_id": "ebc001",
-          "rating": 4,           (null or 1-5)
-          "view_count": 2,
-          "booked": false,
-          "favorited": false,
-          "time_spent_seconds": 41
-        }
-      ],
-      "top_n": 10                (optional, default 10)
-    }
-
-Run:  python app.py
-"""
-
 import os
 import pickle
 import numpy as np
@@ -90,10 +35,6 @@ altitude_risk_map = {'none': 0, 'low': 1, 'moderate': 2, 'high': 3, 'very high':
 # ── Dynamic feature weighting for difficulty/fitness prioritisation ───────────
 
 def dynamic_feature_weights():
-    """
-    Build weight vector that gives 0.3 to difficulty, 0.3 to fitness,
-    and distributes the remaining 0.4 equally across the other features.
-    """
     n_features = trek_feature_scaled.shape[1]
     other_weight = 0.4 / max(n_features - 2, 1)
     w = np.full(n_features, other_weight)
@@ -103,16 +44,6 @@ def dynamic_feature_weights():
 
 
 def difficulty_fitness_penalty(prefs):
-    """
-    Compute a per-trek soft penalty based on difficulty/fitness mismatch.
-
-    If trek difficulty > user preferred difficulty:
-        penalty += 0.25 * (trek_diff - user_diff)   (in raw scale)
-    If trek fitness > user preferred fitness:
-        penalty += 0.25 * (trek_fit  - user_fit)     (in raw scale)
-
-    Trek values are recovered from the scaled matrix using the scaler.
-    """
     diff_idx = col_idx['difficulty']
     fit_idx  = col_idx['fitness']
 
@@ -151,23 +82,6 @@ print(f"  Loaded model: {len(trek_ids)} treks, {len(user_index)} users, "
 # ── Weight computation (mirrors train.py) ─────────────────────────────────────
 
 def compute_weight(interaction: dict) -> float:
-    """
-    Compute interaction weight using the exact same formula as train.py.
-
-    train.py formula:
-        weight_raw = views * 0.3
-                   + booked * 3.0
-                   + favorites * 1.5
-                   + (rating / 5.0) * 2.0
-                   + (time_spent_seconds / 600.0)
-
-    Note: train.py applies global min-max normalisation across all rows
-    to map weight_raw → [0.5, 5.0]. We cannot replicate that here because
-    we only see a handful of rows per request. Instead we clip weight_raw
-    to [0.5, 5.0] directly, which preserves the relative ordering and stays
-    within the training range. The small distributional difference is
-    acceptable for the fold-in step.
-    """
     view_count         = int(interaction.get('view_count', 0))
     booked             = bool(interaction.get('booked', False))
     favorited          = bool(interaction.get('favorited', False))
@@ -190,13 +104,6 @@ def compute_weight(interaction: dict) -> float:
 # ── Interaction validation ────────────────────────────────────────────────────
 
 def validate_interactions(raw_interactions: list) -> tuple[list, list]:
-    """
-    Validate and enrich each interaction.
-
-    Returns:
-        valid   — list of dicts with trek_id, weight, and original fields
-        skipped — list of (trek_id, reason) for debugging
-    """
     valid   = []
     skipped = []
 
@@ -336,25 +243,6 @@ def recommend_cbf(prefs, top_n=10):
 
 
 def recommend_hybrid_runtime(prefs, valid_interactions, top_n=10):
-    """
-    Runtime hybrid: fold-in user vector from posted interactions + CBF.
-
-    ALS fold-in:
-        We don't have a trained user vector for this user, so we
-        approximate it as the weighted average of the item vectors (als_V)
-        for the treks they've interacted with. This is the standard
-        "fold-in" technique for new users in matrix factorisation.
-
-    Alpha (blending weight):
-        Mirrors the adaptive alpha in train.py's recommend_hybrid():
-            alpha = clip(
-                0.5 * min(0.85, n_seen / 20)
-              + 0.5 * min(0.85, total_weight / 30),
-                0.10, 0.90
-            )
-        - Low interactions  → low alpha  → CBF dominates
-        - Many interactions → high alpha → ALS dominates
-    """
     interacted_ids = {ia['trek_id'] for ia in valid_interactions}
 
     # ── CBF score (from preferences) ────────────────────────────────────────
@@ -487,15 +375,6 @@ def _parse_prefs(prefs_dict: dict):
 
 @app.route('/recommend/hybrid', methods=['POST'])
 def recommend_hybrid():
-    """
-    MAIN endpoint for the Node.js backend.
-
-    Decision tree:
-        interactions empty / all invalid → CBF (cold start)
-        interactions present             → Hybrid (ALS fold-in + CBF)
-
-    Always requires `preferences`. `interactions` is optional (default []).
-    """
     body = request.get_json(force=True, silent=True)
     if not body:
         return jsonify({'error': 'JSON body required'}), 400
