@@ -70,8 +70,8 @@ DYN_WEIGHTS = dynamic_feature_weights()
 W_VIEWS    = 0.3
 W_BOOKED   = 3.0
 W_FAVORITED = 1.5
-W_RATING   = 2.0   # applied as (rating / 5.0) * W_RATING
-W_TIME     = 1.0   # applied as (time_spent_seconds / 600.0) * W_TIME
+W_RATING   = 2.0
+W_TIME     = 1.0
 W_MIN      = 0.5
 W_MAX      = 5.0
 
@@ -263,12 +263,8 @@ def recommend_hybrid_runtime(prefs, valid_interactions, top_n=10):
     user_vec     = np.sum(weighted_vecs, axis=0) / total_weight
     als_s        = np.clip(user_vec @ als_V.T, W_MIN, W_MAX)
 
-    # ── Adaptive alpha ───────────────────────────────────────────────────────
     n_seen = len(valid_interactions)
-    alpha  = float(np.clip(
-        0.5 * min(0.85, n_seen / 20.0) + 0.5 * min(0.85, total_weight / 30.0),
-        0.10, 0.90
-    ))
+    alpha  = 0.95 if n_seen >= 5 else 0.90
 
     # ── Blend ────────────────────────────────────────────────────────────────
     final = alpha * normalize_scores(als_s) + (1 - alpha) * normalize_scores(cbf_s)
@@ -311,12 +307,8 @@ def recommend_hybrid_user(user_id, top_n=10):
                if profile is not None else np.zeros(n_treks))
 
     interacted = user_interacted.get(user_id, set())
-    n_seen     = len(interacted)
-    total_w    = user_weight_sums.get(user_id, 0.0)
-    alpha      = float(np.clip(
-        0.5 * min(0.85, n_seen / 20.0) + 0.5 * min(0.85, total_w / 30.0),
-        0.10, 0.90
-    ))
+    n_seen = len(interacted)
+    alpha  = 0.95 if n_seen >= 5 else 0.90
 
     final = alpha * normalize_scores(als_s) + (1 - alpha) * normalize_scores(cbf_s)
 
