@@ -269,8 +269,26 @@ def recommend_hybrid_runtime(prefs, valid_interactions, top_n=10):
     # ── Blend ────────────────────────────────────────────────────────────────
     final = alpha * normalize_scores(als_s) + (1 - alpha) * normalize_scores(cbf_s)
 
+    # Infer effective difficulty/fitness caps from interaction history so the
+    # penalty doesn't suppress treks the user has already shown they can handle.
+    diff_idx = col_idx['difficulty']
+    fit_idx  = col_idx['fitness']
+    max_interacted_diff = max(
+        trek_feature_scaled[trek_index[ia['trek_id']], diff_idx]
+        * (raw_max[diff_idx] - raw_min[diff_idx]) + raw_min[diff_idx]
+        for ia in valid_interactions
+    )
+    max_interacted_fit = max(
+        trek_feature_scaled[trek_index[ia['trek_id']], fit_idx]
+        * (raw_max[fit_idx] - raw_min[fit_idx]) + raw_min[fit_idx]
+        for ia in valid_interactions
+    )
+    effective_prefs = dict(prefs)
+    effective_prefs['difficulty'] = max(prefs['difficulty'], max_interacted_diff)
+    effective_prefs['fitness']    = max(prefs['fitness'],    max_interacted_fit)
+
     # Apply difficulty/fitness soft penalty after blending
-    final -= difficulty_fitness_penalty(prefs)
+    final -= difficulty_fitness_penalty(effective_prefs)
 
     # Exclude already-interacted treks
     for tid in interacted_ids:
