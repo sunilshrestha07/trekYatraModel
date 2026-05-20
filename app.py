@@ -244,58 +244,58 @@ def recommend_cbf(prefs, top_n=10):
 
 def recommend_hybrid_runtime(prefs, valid_interactions, top_n=10):
     interacted_ids = {ia['trek_id'] for ia in valid_interactions}
-
-    # ── CBF score (from preferences) ────────────────────────────────────────
-    vec   = preferences_to_vector(prefs)
-    cbf_s = cosine_sim(vec.reshape(1, -1), trek_feature_scaled,
-                       weights=DYN_WEIGHTS)[0]
-
-    # ── ALS fold-in (from interactions) ─────────────────────────────────────
-    weighted_vecs = []
-    weights       = []
-    for ia in valid_interactions:
-        idx = trek_index[ia['trek_id']]
-        w   = ia['weight']
-        weighted_vecs.append(als_V[idx] * w)
-        weights.append(w)
-
-    total_weight = sum(weights)
-    user_vec     = np.sum(weighted_vecs, axis=0) / total_weight
-    als_s        = np.clip(user_vec @ als_V.T, W_MIN, W_MAX)
-
-    n_seen = len(valid_interactions)
-    alpha  = 0.95 if n_seen >= 5 else 0.90
-
-    # ── Blend ────────────────────────────────────────────────────────────────
-    final = alpha * normalize_scores(als_s) + (1 - alpha) * normalize_scores(cbf_s)
-
-    # Infer effective difficulty/fitness caps from interaction history so the
-    # penalty doesn't suppress treks the user has already shown they can handle.
     diff_idx = col_idx['difficulty']
     fit_idx  = col_idx['fitness']
-    max_interacted_diff = max(
+
+    # ── Step 1: effective preferences from interaction history ───────────────
+    # Take the hardest difficulty/fitness the user actually engaged with so
+    # all downstream stages (CBF vector, fold-in, penalty) respect it.
+    max_inter_diff = max(
         trek_feature_scaled[trek_index[ia['trek_id']], diff_idx]
         * (raw_max[diff_idx] - raw_min[diff_idx]) + raw_min[diff_idx]
         for ia in valid_interactions
     )
-    max_interacted_fit = max(
+    max_inter_fit = max(
         trek_feature_scaled[trek_index[ia['trek_id']], fit_idx]
         * (raw_max[fit_idx] - raw_min[fit_idx]) + raw_min[fit_idx]
         for ia in valid_interactions
     )
     effective_prefs = dict(prefs)
-    effective_prefs['difficulty'] = max(prefs['difficulty'], max_interacted_diff)
-    effective_prefs['fitness']    = max(prefs['fitness'],    max_interacted_fit)
+    effective_prefs['difficulty'] = max(prefs['difficulty'], max_inter_diff)
+    effective_prefs['fitness']    = max(prefs['fitness'],    max_inter_fit)
 
-    # Apply difficulty/fitness soft penalty after blending
+    # ── Step 2: CBF score built from effective preferences ───────────────────
+    vec   = preferences_to_vector(effective_prefs)
+    cbf_s = cosine_sim(vec.reshape(1, -1), trek_feature_scaled,
+                       weights=DYN_WEIGHTS)[0]
+
+    # ── Step 3: ALS fold-in weighted by each trek's own difficulty ───────────
+    # Harder interacted treks pull the user vector more strongly, so
+    # easy-trek interactions cannot cancel out hard-trek signals.
+    weighted_vecs = []
+    fold_weights  = []
+    for ia in valid_interactions:
+        idx         = trek_index[ia['trek_id']]
+        diff_scaled = trek_feature_scaled[idx, diff_idx]      # 0–1
+        w_boosted   = ia['weight'] * (1.0 + diff_scaled)
+        weighted_vecs.append(als_V[idx] * w_boosted)
+        fold_weights.append(w_boosted)
+
+    total_fold = sum(fold_weights)
+    user_vec   = np.sum(weighted_vecs, axis=0) / total_fold
+    als_s      = np.clip(user_vec @ als_V.T, W_MIN, W_MAX)
+
+    n_seen = len(valid_interactions)
+    alpha  = 0.95 if n_seen >= 5 else 0.90
+
+    # ── Step 4: blend, penalise, exclude, rerank ─────────────────────────────
+    final  = alpha * normalize_scores(als_s) + (1 - alpha) * normalize_scores(cbf_s)
     final -= difficulty_fitness_penalty(effective_prefs)
 
-    # Exclude already-interacted treks
     for tid in interacted_ids:
         if tid in trek_index:
             final[trek_index[tid]] = -1.0
 
-    # Rerank bonus
     for i in range(n_treks):
         if final[i] > 0:
             final[i] += rerank_bonus(prefs, trek_by_id[trek_ids[i]])
