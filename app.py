@@ -247,22 +247,27 @@ def recommend_hybrid_runtime(prefs, valid_interactions, top_n=10):
     diff_idx = col_idx['difficulty']
     fit_idx  = col_idx['fitness']
 
-    # ── Step 1: effective preferences from interaction history ───────────────
-    # Take the hardest difficulty/fitness the user actually engaged with so
-    # all downstream stages (CBF vector, fold-in, penalty) respect it.
-    max_inter_diff = max(
-        trek_feature_scaled[trek_index[ia['trek_id']], diff_idx]
-        * (raw_max[diff_idx] - raw_min[diff_idx]) + raw_min[diff_idx]
+    # ── Step 1: effective preferences derived purely from interaction behavior ─
+    # Use a weighted average of the difficulty/fitness of interacted treks
+    # (weighted by engagement strength) so actual behavior drives all downstream
+    # stages — CBF vector, ALS fold-in, and penalty — not stated preferences.
+    total_raw_weight = sum(ia['weight'] for ia in valid_interactions)
+    inter_diff = sum(
+        ia['weight']
+        * (trek_feature_scaled[trek_index[ia['trek_id']], diff_idx]
+           * (raw_max[diff_idx] - raw_min[diff_idx]) + raw_min[diff_idx])
         for ia in valid_interactions
-    )
-    max_inter_fit = max(
-        trek_feature_scaled[trek_index[ia['trek_id']], fit_idx]
-        * (raw_max[fit_idx] - raw_min[fit_idx]) + raw_min[fit_idx]
+    ) / total_raw_weight
+    inter_fit = sum(
+        ia['weight']
+        * (trek_feature_scaled[trek_index[ia['trek_id']], fit_idx]
+           * (raw_max[fit_idx] - raw_min[fit_idx]) + raw_min[fit_idx])
         for ia in valid_interactions
-    )
+    ) / total_raw_weight
+
     effective_prefs = dict(prefs)
-    effective_prefs['difficulty'] = max(prefs['difficulty'], max_inter_diff)
-    effective_prefs['fitness']    = max(prefs['fitness'],    max_inter_fit)
+    effective_prefs['difficulty'] = inter_diff
+    effective_prefs['fitness']    = inter_fit
 
     # ── Step 2: CBF score built from effective preferences ───────────────────
     vec   = preferences_to_vector(effective_prefs)
