@@ -290,8 +290,7 @@ def recommend_hybrid_runtime(prefs, valid_interactions, top_n=10):
     user_vec   = np.sum(weighted_vecs, axis=0) / total_fold
     als_s      = np.clip(user_vec @ als_V.T, W_MIN, W_MAX)
 
-    n_seen = len(valid_interactions)
-    alpha  = 0.95 if n_seen >= 5 else 0.90
+    alpha  = 0.98
 
     # ── Step 4: blend, penalise, exclude, rerank ─────────────────────────────
     final  = alpha * normalize_scores(als_s) + (1 - alpha) * normalize_scores(cbf_s)
@@ -330,8 +329,7 @@ def recommend_hybrid_user(user_id, top_n=10):
                if profile is not None else np.zeros(n_treks))
 
     interacted = user_interacted.get(user_id, set())
-    n_seen = len(interacted)
-    alpha  = 0.95 if n_seen >= 5 else 0.90
+    alpha  = 0.98
 
     final = alpha * normalize_scores(als_s) + (1 - alpha) * normalize_scores(cbf_s)
 
